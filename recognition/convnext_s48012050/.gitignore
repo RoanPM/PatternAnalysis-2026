@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+
+# Visual Studio Code
+.vscode/
+
+# Temp/Log files
+*.log
+*.tmp
+.env
+
+# Large Files
+/models
+/datasets
