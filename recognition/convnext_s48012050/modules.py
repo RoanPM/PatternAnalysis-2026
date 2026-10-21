@@ -3,6 +3,7 @@ Contains the source code for the components of the model/s
 """
 import torch
 from torch import nn
+from torchvision.ops import StochasticDepth
 
 ###### BASELINE CNN ######
 class ConvBlock(nn.Module):
@@ -56,7 +57,243 @@ class BaselineCNN(nn.Module):
         return self.classifier(x)
 
 
-###### CONVNEXT ######
-class ConvNext():
-    def __init__(self):
-        raise(NotImplementedError("Convnext is not yet implemented"))
+###### ConvNeXt ######
+class ConvNeXtLayerNorm(nn.Module):
+    """
+    Customised layer norm implementation. This is necessary since nn.LayerNorm()
+    uses BHWC, but the convolutions expect BCHW. We permute the tensor, compute
+    the layer norm and then permute the tensor back
+    """
+    def __init__(self, in_channels):
+        super().__init__()
+        self.layer_norm = nn.LayerNorm(in_channels)
+
+    def forward(self, x: torch.Tensor):
+        # permute to have channels last (B, C, H, W) -> (B, H, W, C)
+        x_perm = x.permute(0, 2, 3, 1)
+        x_normed = self.layer_norm(x_perm) # norms last dimension
+
+        # (B, H, W, C) -> (B, C, H, W)
+        x_out = x_normed.permute(0, 3, 1, 2)
+        return x_out
+
+
+class ConvNeXtBlock(nn.Module):
+    """
+    A single block of the ConvNeXt algorithm
+    references: 
+        - https://www.geeksforgeeks.org/computer-vision/ConvNeXt/
+        - https://www.researchgate.net/figure/Structure-chart-of-ConvNeXt-Block_fig4_363389821
+    """
+    def __init__(self,
+        in_channels: int,
+        layer_scale_init: float = 1e-6,
+        p_drop: float = 0.0
+    ):
+        super().__init__()
+        self.layer_scale_init = layer_scale_init
+
+        if p_drop < 0.0 or p_drop >= 1.0:
+            raise ValueError("p_drop must be at least 0 and less than 1")
+
+        self.block = nn.Sequential(
+            nn.Conv2d( # depthwise convolution
+                in_channels=in_channels,
+                out_channels=in_channels,
+                kernel_size=7,
+                stride=1,
+                padding=3,
+                groups=in_channels # each channel computed independently
+            ),
+            ConvNeXtLayerNorm(in_channels),
+            nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=4*in_channels,
+                kernel_size=1
+            ),
+            nn.GELU(),
+            nn.Conv2d(
+                in_channels=4*in_channels,
+                out_channels=in_channels,
+                kernel_size=1
+            )
+        )
+
+        # layer scale (one learnable scaling parameter per channel)
+        self.gamma = nn.Parameter(
+                self.layer_scale_init * 
+                torch.ones(in_channels)
+        )
+
+        # drop path
+        if p_drop > 0:
+            self.drop_path = StochasticDepth(p_drop)
+        else:
+            self.drop_path = nn.Identity()
+
+    def forward(self, x: torch.Tensor):
+        residual = x
+        x = self.block(x)
+        x = x * self.gamma.view(1, -1, 1, 1)
+        x = self.drop_path(x)
+        return residual + x
+
+
+class ConvNeXtDownsample(nn.Module):
+    """
+    ConvNeXt Downsample block
+    references: 
+        - https://www.geeksforgeeks.org/computer-vision/ConvNeXt/
+    """
+    def __init__(self, in_channels, channel_scale):
+        super().__init__()
+        self.downsample = nn.Sequential(
+            ConvNeXtLayerNorm(in_channels),
+            nn.Conv2d( # halves height and width
+                in_channels=in_channels,
+                out_channels=channel_scale*in_channels,
+                kernel_size=2,
+                stride=2
+            )
+        )
+
+    def forward(self, x):
+        return self.downsample(x)
+
+
+class ConvNeXt(nn.Module):
+    """
+    Modified ConvNeXt algorithm with a (batch x 1 x 240 x 256) input size.
+    The implementation attempts to mirror the downsampling scales used by the 
+    original ConvNeXt model.
+    Consists of:
+        Stem:
+            (1,240,256) -> (96,60,64) 4x4 Convolution stride 4 then LayerNorm
+        3 ConvNeXt Blocks:
+            (96,60,64) -> (96,60,64)
+        Downsample:
+            (96,60,64) -> (192,30,32) LayerNorm + 2x2 Convolution stride 2
+        3 ConvNeXt Blocks:
+            (192,30,32) -> (192,30,32)
+        Downsample:
+            (192,30,32) -> (384,15,16)
+        9 ConvNeXt Blocks:
+            (384,15,16) -> (384,15,16)
+        Downsample:
+            (384,15,16) -> (768,7,8)
+        3 ConvNeXt Blocks:
+            (768,7,8) -> (768,7,8)
+        Global Average Pooling:
+            (768,7,8) -> (768,1,1)
+        Flatten + Linear:
+            (768) -> (1)
+    
+    ConvNeXt blocks perform depthwise convolutions (convolutions independent 
+    of channels) and do not change the input size.
+    Downsampling reduces the input sizes by ~1/2 and increases the channel size
+    by 2.
+    Global average pooling averages per channel and reduces each to size 1
+    References:
+        https://www.geeksforgeeks.org/computer-vision/ConvNeXt/
+    """
+    in_channels = 1
+    stem_out_channels = 96
+    channel_scale = 2
+    block_nums = (3, 3, 9, 3)
+
+
+    def __init__(self,
+        initial_layer_scale: float = 1e-6,
+        p_drop: float = 0.0
+    ):
+        super().__init__()
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(
+            in_channels=self.in_channels,
+            out_channels=self.stem_out_channels,
+            kernel_size=4,
+            stride=4
+            ),
+            ConvNeXtLayerNorm(self.stem_out_channels)
+        )
+
+        # 3 ConvNeXt blocks + downsample
+        self.stage1 = nn.Sequential(
+            *[
+                ConvNeXtBlock(
+                    in_channels=self.stem_out_channels, 
+                    p_drop=p_drop, 
+                    layer_scale_init=initial_layer_scale
+                ) for _ in range(self.block_nums[0])
+            ],
+            ConvNeXtDownsample(
+                in_channels=self.stem_out_channels,
+                channel_scale=self.channel_scale
+            )
+        )
+
+        # 3 ConvNeXt blocks (w/ 2x channels) + downsample
+        stage2_channels = self.channel_scale * self.stem_out_channels
+        self.stage2 = nn.Sequential(
+            *[
+                ConvNeXtBlock(
+                    in_channels=stage2_channels,
+                    p_drop=p_drop, 
+                    layer_scale_init=initial_layer_scale
+                ) for _ in range(self.block_nums[1])
+            ],
+            ConvNeXtDownsample(
+                in_channels=stage2_channels,
+                channel_scale=self.channel_scale
+            )
+        )
+
+        # 9 ConvNeXt blocks (w/ 2x channels) + downsample
+        stage3_channels = self.channel_scale**2 * self.stem_out_channels
+        self.stage3 = nn.Sequential(
+            *[
+                ConvNeXtBlock(
+                    in_channels=stage3_channels,
+                    p_drop=p_drop, 
+                    layer_scale_init=initial_layer_scale
+                ) for _ in range(self.block_nums[2])
+            ],
+            ConvNeXtDownsample(
+                in_channels=stage3_channels,
+                channel_scale=self.channel_scale
+            )
+        )
+
+        # 3 ConvNeXt blocks but no downsample
+        stage4_channels = self.channel_scale**3 * self.stem_out_channels
+        self.stage4 = nn.Sequential(*[
+            ConvNeXtBlock(
+                in_channels=stage4_channels,
+                p_drop=p_drop, 
+                layer_scale_init=initial_layer_scale
+            ) for _ in range(self.block_nums[3])
+        ])
+
+        # global average pooling
+        self.pool = nn.AdaptiveAvgPool2d(output_size=1)
+
+        # final linear layer
+        self.linear = nn.Linear(
+            in_features=stage4_channels,
+            out_features=1
+        )
+
+
+
+
+    def forward(self, x: torch.Tensor):
+        x = self.stem(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+        x = self.pool(x)
+        x = x.flatten(start_dim=1) # flatten C,H,W
+        x = self.linear(x)
+        return x

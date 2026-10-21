@@ -10,7 +10,7 @@ Arguments:
     --epochs, int
     --batch-size, int
     --learning-rate, float
-    --weight-decay, loat
+    --weight-decay, float
     --val-fraction, float (0<=val_fraction<1)
     --checkpoint-every, int
     --num-workers, int
