@@ -5,6 +5,7 @@ Example usage:
     python train.py --data-dir datasets --epochs 30 --batch-size 32
 
 Arguments:
+    --model, str: Model architecture to use, 'convnext' (default) or 'baseline'
     --data-dir, str | Path
     --output-dir, str | Path
     --epochs, int
@@ -30,7 +31,7 @@ from torch import nn
 from torch.optim import AdamW
 
 from dataset import create_dataloaders
-from modules import BaselineCNN
+from modules import BaselineCNN, ConvNeXt
 
 
 CLASS_NAMES = ["AD", "NC"]
@@ -80,6 +81,11 @@ def _run_epoch(model: nn.Module,
             if training:
                 optimizer.zero_grad(set_to_none=True)
             logits = model(images)
+            if labels.min() < 0 or labels.max() >= logits.shape[1]:
+                raise ValueError(
+                    f"Invalid labels: {labels.unique().tolist()}, "
+                    f"model output shape: {logits.shape}"
+                )
             loss = criterion(logits, labels)
             if training:
                 loss.backward()
@@ -243,12 +249,12 @@ def train_model(
         }
         history.append(row)
         val_text = (
-            f" | val loss {val_metrics['loss']:.4f} | val acc {val_metrics['accuracy']:.3f}%"
+            f" | val loss {val_metrics['loss']:.4f} | val acc {val_metrics['accuracy']:.2%}%"
             if val_metrics else ""
         )
         print(
             f"Epoch {epoch + 1}/{epochs} | train loss {train_metrics['loss']:.4f} "
-            f"| train acc {train_metrics['accuracy']:.3f}%{val_text} "
+            f"| train acc {train_metrics['accuracy']:.2%}{val_text} "
             f"| {epoch_seconds:.1f}s"
         )
 
@@ -308,6 +314,7 @@ def train_model(
 
 def main():
     parser = argparse.ArgumentParser(description="Train the baseline ADNI CNN")
+    parser.add_argument("--model", default="convnext", help="Model architecture to use")
     parser.add_argument("--data-dir", default="datasets", help="Directory containing train/ and test/")
     parser.add_argument("--output-dir", default="models")
     parser.add_argument("--epochs", type=int, default=30)
@@ -329,7 +336,12 @@ def main():
         num_workers=args.num_workers,
         seed=args.seed,
     )
-    model = BaselineCNN(num_classes=2)
+    if args.model == "convnext":
+        model = ConvNeXt(num_classes=2)
+    elif args.model == "baseline":
+        model = BaselineCNN(num_classes=2)
+    else:
+        raise ValueError(f"Unknown model architecture: {args.model}")
     train_model(
         model,
         loaders["train"],

@@ -186,13 +186,14 @@ class ConvNeXt(nn.Module):
         Global Average Pooling:
             (768,7,8) -> (768,1,1)
         Flatten + Linear:
-            (768) -> (1)
+            (768) -> (2)
     
     ConvNeXt blocks perform depthwise convolutions (convolutions independent 
     of channels) and do not change the input size.
     Downsampling reduces the input sizes by ~1/2 and increases the channel size
     by 2.
-    Global average pooling averages per channel and reduces each to size 1
+    Global average pooling averages per channel and reduces each to size 1.
+    Final linear layer reduces the channel size to the number of classes (2).
     References:
         https://www.geeksforgeeks.org/computer-vision/ConvNeXt/
     """
@@ -203,6 +204,7 @@ class ConvNeXt(nn.Module):
 
 
     def __init__(self,
+        num_classes: int = 2,
         initial_layer_scale: float = 1e-6,
         p_drop: float = 0.0
     ):
@@ -281,7 +283,7 @@ class ConvNeXt(nn.Module):
         # final linear layer
         self.linear = nn.Linear(
             in_features=stage4_channels,
-            out_features=1
+            out_features=num_classes # two class output (matches baseline)
         )
 
 
