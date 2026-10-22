@@ -9,13 +9,14 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
+from torchvision.transforms import v2
 
 
 CLASS_TO_IDX = {"AD": 0, "NC": 1}
 IMAGE_SIZE = (240, 256)  # (height, width)
 
 
-def make_transforms() -> transforms.Compose:
+def make_transforms(augment: bool) -> transforms.Compose:
     """
     Create the transformation composition used for the dataset.
     Currently just scales pixel values, but this method can be adapted
@@ -24,10 +25,15 @@ def make_transforms() -> transforms.Compose:
     Returns:
         transforms.Compose: The transformations
     """
-    return transforms.Compose([
+    ops: list = [
         transforms.Grayscale(num_output_channels=1),
-        transforms.ToTensor(),
-    ])
+        transforms.ToTensor(), # must be before augmentation, v2 expects tensors
+    ]
+    if augment:
+        # augmentation: Add gausian noise
+        ops.append(v2.GaussianNoise(mean=0.0, sigma=0.1, clip=True))
+        
+    return transforms.Compose(ops)
 
 
 def validation_split(dataset, val_fraction: float, seed: int | None = None) -> Tuple[list, list]:
@@ -122,9 +128,9 @@ def create_dataloaders(
             raise FileNotFoundError(f"Expected class directory was not found: {directory}")
 
     # ImageFolder creates the class labels for us alphabetically, so AD=0, NC=1
-    train_dataset = datasets.ImageFolder(train_dir, transform=make_transforms())
-    val_dataset = copy.deepcopy(train_dataset)  # We will subset this later
-    test_dataset = datasets.ImageFolder(test_dir, transform=make_transforms())
+    train_dataset = datasets.ImageFolder(train_dir, transform=make_transforms(augment=True))
+    val_dataset = datasets.ImageFolder(train_dir, transform=make_transforms(augment=False))
+    test_dataset = datasets.ImageFolder(test_dir, transform=make_transforms(augment=False))
 
     if val_fraction > 0:
         train_indices, val_indices = validation_split(train_dataset, val_fraction, seed)

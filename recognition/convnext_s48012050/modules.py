@@ -1,9 +1,55 @@
 """
 Contains the source code for the components of the model/s
 """
+from typing import Literal
+
 import torch
 from torch import nn
 from torchvision.ops import StochasticDepth
+from dataset import CLASS_TO_IDX
+DEFAULT_CONFIDENCE_THRESHOLD = 0.8
+
+###### General prediction function with confidence thresholding ######
+def predict(
+    x: torch.Tensor,
+    model: torch.nn.Module,
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    mode: Literal["flag", "mask"] = "mask"
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Predicts classes from the tensor x, returning a tensor of shape (batch, 2) with the predicted 
+    class and confidence. For each sample, if the confidence is below the threshold, the predicted class 
+    is set to -1, indicating the desire for human input
+
+    Args:
+        x (torch.Tensor): input tensor of shape (batch, 1, 256,240)
+        model (torch.nn.Module): The trained model to use for prediction
+        confidence_threshold (float, optional): Threshold for determining class predictions. 
+        Defaults to DEFAULT_CONFIDENCE_THRESHOLD.
+        mode (Literal["flag", "mask"], optional): The mode for handling uncertain predictions. mask will
+        default low confidence predicitions to AD and flag will default low confidence predictions 
+        to -1.
+        Defaults to "mask".
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: Predicted classes and confidences.
+    """
+    model.eval()  # Set the model to evaluation mode
+    with torch.no_grad():
+        logits = model.forward(x)
+        probabilities = torch.softmax(logits, dim=1)
+        confidences, predictions = probabilities.max(dim=1)
+
+        if mode == "flag":
+            # Apply confidence threshold
+            # If the confidence is below the threshold, set the prediction to -1, indicating uncertainty
+            # in the prediction and that human input may be required for this sample
+            predictions[confidences < confidence_threshold] = -1
+            return predictions, confidences
+
+        # Low confidence predictions will be defaulted to AD
+        predictions[confidences < confidence_threshold] = CLASS_TO_IDX["AD"]
+        return predictions, confidences
 
 ###### BASELINE CNN ######
 class ConvBlock(nn.Module):
@@ -56,6 +102,15 @@ class BaselineCNN(nn.Module):
         x = self.pool(x)
         return self.classifier(x)
 
+    def predict(self,
+        x: torch.Tensor,
+        confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+        mode: Literal["flag", "mask"] = "mask"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calls predict() with the baseline CNN model
+        """
+        return predict(x, self, confidence_threshold, mode)
 
 ###### ConvNeXt ######
 class ConvNeXtLayerNorm(nn.Module):
@@ -127,7 +182,7 @@ class ConvNeXtBlock(nn.Module):
 
         # drop path
         if p_drop > 0:
-            self.drop_path = StochasticDepth(p_drop)
+            self.drop_path = StochasticDepth(p_drop, mode="row")
         else:
             self.drop_path = nn.Identity()
 
@@ -287,8 +342,6 @@ class ConvNeXt(nn.Module):
         )
 
 
-
-
     def forward(self, x: torch.Tensor):
         x = self.stem(x)
         x = self.stage1(x)
@@ -299,3 +352,13 @@ class ConvNeXt(nn.Module):
         x = x.flatten(start_dim=1) # flatten C,H,W
         x = self.linear(x)
         return x
+
+    def predict(self,
+        x: torch.Tensor,
+        confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+        mode: Literal["flag", "mask"] = "mask"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calls predict() with the ConvNeXt model
+        """
+        return predict(x, self, confidence_threshold, mode)

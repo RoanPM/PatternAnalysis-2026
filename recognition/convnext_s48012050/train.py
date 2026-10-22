@@ -17,6 +17,7 @@ Arguments:
     --num-workers, int
     --seed, int
     --resume-from, str | Path
+    --p_drop, float: Drop path rate for ConvNeXt model (0.0 to 1.0). Default is 0.0 (no drop path).
 """
 import argparse
 import csv
@@ -195,6 +196,7 @@ def train_model(
     """
     model_name = model.__class__.__name__
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
     device = torch.device(device)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -227,6 +229,26 @@ def train_model(
     for epoch in range(start_epoch, epochs):
         epoch_start = time.perf_counter()
 
+        # Reset GPU memory statistics for this epoch.
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
+
+        train_metrics = _run_epoch(model, train_loader, criterion, device, optimizer)
+
+        # Capture peak memory immediately after training
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+            peak_vram_allocated_mib = (
+                torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+            )
+            peak_vram_reserved_mib = (
+                torch.cuda.max_memory_reserved(device) / (1024 ** 2)
+            )
+        else:
+            peak_vram_allocated_mib = ""
+            peak_vram_reserved_mib = ""
+
         train_metrics = _run_epoch(model, train_loader, criterion, device, optimizer)
         val_metrics = _run_epoch(model, val_loader, criterion, device) if val_loader else None
 
@@ -246,6 +268,8 @@ def train_model(
             "val_seconds": val_metrics["seconds"] if val_metrics else "",
             "learning_rate": current_lr,
             "epoch_seconds": epoch_seconds,
+            "peak_vram_allocated_mib": peak_vram_allocated_mib,
+            "peak_vram_reserved_mib": peak_vram_reserved_mib,
         }
         history.append(row)
         val_text = (
@@ -285,6 +309,11 @@ def train_model(
             writer = csv.DictWriter(file, fieldnames=list(history[0].keys()))
             writer.writeheader()
             writer.writerows(history)
+
+        # save compute being wasted on overfitted model
+        if train_metrics["accuracy"] == 1.0:
+            print("Training accuracy reached 100%, stopping early.")
+            break
 
     torch.save(model.state_dict(), output_path / f"{model_name}_final.pt")
 
@@ -326,6 +355,7 @@ def main():
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--p_drop", type=float, default=0.0)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -337,8 +367,10 @@ def main():
         seed=args.seed,
     )
     if args.model == "convnext":
-        model = ConvNeXt(num_classes=2)
+        model = ConvNeXt(num_classes=2, p_drop=args.p_drop)
     elif args.model == "baseline":
+        if args.p_drop != 0.0:
+            raise ValueError("Drop path is not supported for the baseline model")
         model = BaselineCNN(num_classes=2)
     else:
         raise ValueError(f"Unknown model architecture: {args.model}")
