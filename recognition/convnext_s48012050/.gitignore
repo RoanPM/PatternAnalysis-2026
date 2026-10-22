@@ -8,7 +8,10 @@ __pycache__/
 *.log
 *.tmp
 .env
+.sh
 
-# Large Files
+# model weights, datasets, and prediction results
 /models
 /datasets
+/prediction_results
+/output
