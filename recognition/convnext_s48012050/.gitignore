@@ -7,8 +7,8 @@ __pycache__/
 # Temp/Log files
 *.log
 *.tmp
-.env
-.sh
+*.env
+*.sh
 
 # model weights, datasets, and prediction results
 /models
