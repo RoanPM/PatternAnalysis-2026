@@ -249,6 +249,7 @@ class ConvNeXt(nn.Module):
     by 2.
     Global average pooling averages per channel and reduces each to size 1.
     Final linear layer reduces the channel size to the number of classes (2).
+    Each ConvNeXt block increases the drop path rate linearly from the next up to the maximum p_drop_max.
     References:
         https://www.geeksforgeeks.org/computer-vision/ConvNeXt/
     """
@@ -261,9 +262,13 @@ class ConvNeXt(nn.Module):
     def __init__(self,
         num_classes: int = 2,
         initial_layer_scale: float = 1e-6,
-        p_drop: float = 0.0
+        p_drop_max: float = 0.0
     ):
         super().__init__()
+
+        drop_path_rates = torch.linspace(
+            0.0, p_drop_max, steps=len(self.block_nums)
+        ).tolist()
 
         self.stem = nn.Sequential(
             nn.Conv2d(
@@ -280,7 +285,7 @@ class ConvNeXt(nn.Module):
             *[
                 ConvNeXtBlock(
                     in_channels=self.stem_out_channels, 
-                    p_drop=p_drop, 
+                    p_drop=drop_path_rates[0], 
                     layer_scale_init=initial_layer_scale
                 ) for _ in range(self.block_nums[0])
             ],
@@ -296,7 +301,7 @@ class ConvNeXt(nn.Module):
             *[
                 ConvNeXtBlock(
                     in_channels=stage2_channels,
-                    p_drop=p_drop, 
+                    p_drop=drop_path_rates[1], 
                     layer_scale_init=initial_layer_scale
                 ) for _ in range(self.block_nums[1])
             ],
@@ -312,7 +317,7 @@ class ConvNeXt(nn.Module):
             *[
                 ConvNeXtBlock(
                     in_channels=stage3_channels,
-                    p_drop=p_drop, 
+                    p_drop=drop_path_rates[2], 
                     layer_scale_init=initial_layer_scale
                 ) for _ in range(self.block_nums[2])
             ],
@@ -327,7 +332,7 @@ class ConvNeXt(nn.Module):
         self.stage4 = nn.Sequential(*[
             ConvNeXtBlock(
                 in_channels=stage4_channels,
-                p_drop=p_drop, 
+                p_drop=drop_path_rates[3], 
                 layer_scale_init=initial_layer_scale
             ) for _ in range(self.block_nums[3])
         ])

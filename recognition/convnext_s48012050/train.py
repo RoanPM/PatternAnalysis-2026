@@ -17,7 +17,7 @@ Arguments:
     --num-workers, int
     --seed, int
     --resume-from, str | Path
-    --p_drop, float: Drop path rate for ConvNeXt model (0.0 to 1.0). Default is 0.0 (no drop path).
+    --p_drop, float: Maximum drop path rate for ConvNeXt model (0.0 to 1.0). Default is 0.0 (no drop path).
 """
 import argparse
 import csv
@@ -367,7 +367,7 @@ def main():
         seed=args.seed,
     )
     if args.model == "convnext":
-        model = ConvNeXt(num_classes=2, p_drop=args.p_drop)
+        model = ConvNeXt(num_classes=2, p_drop_max=args.p_drop)
     elif args.model == "baseline":
         if args.p_drop != 0.0:
             raise ValueError("Drop path is not supported for the baseline model")

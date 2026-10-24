@@ -9,7 +9,6 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
-from torchvision.transforms import v2
 
 
 CLASS_TO_IDX = {"AD": 0, "NC": 1}
@@ -27,11 +26,15 @@ def make_transforms(augment: bool) -> transforms.Compose:
     """
     ops: list = [
         transforms.Grayscale(num_output_channels=1),
-        transforms.ToTensor(), # must be before augmentation, v2 expects tensors
+        transforms.ToTensor(),
     ]
     if augment:
-        # augmentation: Add gausian noise
-        ops.append(v2.GaussianNoise(mean=0.0, sigma=0.1, clip=True))
+        # small affine augmentation for variations in positioning.
+        ops.append(transforms.RandomAffine(
+            degrees=5,
+            translate=(0.03, 0.03),
+            scale=(0.95, 1.05),
+        ))
         
     return transforms.Compose(ops)
 
