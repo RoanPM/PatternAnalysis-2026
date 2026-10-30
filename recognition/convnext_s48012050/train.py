@@ -273,7 +273,7 @@ def train_model(
         }
         history.append(row)
         val_text = (
-            f" | val loss {val_metrics['loss']:.4f} | val acc {val_metrics['accuracy']:.2%}%"
+            f" | val loss {val_metrics['loss']:.4f} | val acc {val_metrics['accuracy']:.2%}"
             if val_metrics else ""
         )
         print(
@@ -300,7 +300,7 @@ def train_model(
                 "best_epoch": best_epoch,
                 "history": history,
             }
-            torch.save(checkpoint_data, output_path / f"{model_name}_checkpoint.pt")
+            torch.save(checkpoint_data, output_path / f"{model_name}_checkpoint_{epoch + 1}.pt")
 
 
         # Update the CSV after each epoch, so metrics survive interruptions.

@@ -36,7 +36,7 @@ Outputs:
     prediction_summary.json  Parameter counts and evaluation metrics
     prediction_examples.png  Visual examples of model predictions
     confusion_matrix.png     Test-set confusion matrix
-    roc_curve.png            ROC curve for NC as the positive class
+    roc_curve.png            ROC curve for AD as the positive class
     reject_predictions.csv   (Optional) Per-image predictions with confidence-based rejection
 
 
@@ -157,27 +157,29 @@ def save_confusion_matrix(matrix, class_names, output_path, title):
     plt.close(fig)
 
 
-def save_roc_curve(labels, nc_probabilities, nc_index, output_path):
-    """Save the binary ROC curve using NC as the positive class."""
-    binary_labels = (labels == nc_index).astype(int)
+def save_roc_curve(labels, ad_probabilities, ad_index, output_path):
+    """Save the binary ROC curve using AD as the positive class."""
+    binary_labels = (labels == ad_index).astype(int)
 
     if len(set(binary_labels.tolist())) != 2:
         print("Warning: ROC curve/AUROC unavailable: test set has one class.")
         return None
 
-    fpr, tpr, _ = roc_curve(binary_labels, nc_probabilities)
-    roc_auc = roc_auc_score(binary_labels, nc_probabilities)
+    fpr, tpr, _ = roc_curve(binary_labels, ad_probabilities)
+    roc_auc = roc_auc_score(binary_labels, ad_probabilities)
 
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.plot(fpr, tpr, label=f"AUROC = {roc_auc:.4f}")
     ax.plot([0, 1], [0, 1], linestyle="--", label="Random classifier")
+
     ax.set(
         xlabel="False positive rate",
         ylabel="True positive rate",
-        title="ROC curve (NC positive class)",
+        title="ROC curve (AD positive class)",
         xlim=(0, 1),
         ylim=(0, 1.02),
     )
+
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
@@ -248,14 +250,17 @@ def evaluate_predictions(
             "f1": float(f1[index]), # type: ignore
             "support": int(support[index]), # type: ignore
         }
+    ad_metrics = per_class["AD"]
+    nc_metrics = per_class["NC"]
 
-    nc_index = class_names.index("NC")
-    nc_probabilities = probabilities[:, nc_index]
+
+    ad_index = class_names.index("AD")
+    ad_probabilities = probabilities[:, ad_index]
 
     roc_auc = save_roc_curve(
         labels,
-        nc_probabilities,
-        nc_index,
+        ad_probabilities,
+        ad_index,
         output_dir / "roc_curve.png",
     )
 
@@ -269,16 +274,123 @@ def evaluate_predictions(
     return {
         "num_examples": int(len(labels)),
         "accuracy": float(accuracy_score(labels, predictions)),
+        "precision": float(precision_recall_fscore_support(
+            labels, predictions, average="weighted", zero_division=0
+        )[0]),
+        "recall": float(precision_recall_fscore_support(
+            labels, predictions, average="weighted", zero_division=0
+        )[1]),
+        "macro_precision": float(precision_recall_fscore_support(
+            labels, predictions, average="macro", zero_division=0
+        )[0]),
+        "macro_recall": float(precision_recall_fscore_support(
+            labels, predictions, average="macro", zero_division=0
+        )[1]),
         "macro_f1": float(
             precision_recall_fscore_support(
                 labels, predictions, average="macro", zero_division=0
             )[2]
         ),
         "per_class": per_class,
-        "auroc_nc_positive": roc_auc,
+        "auroc_ad_positive": roc_auc,
         "confusion_matrix": matrix.tolist(),
         "class_names": class_names,
     }
+
+def save_gradcam_examples(model, examples, device, output_path, target_layer):
+    """Save Grad-CAM overlays for selected misclassified images."""
+    if not examples:
+        return
+
+    columns = min(4, len(examples))
+    rows = (len(examples) + columns - 1) // columns
+
+    fig, axes = plt.subplots(
+        rows, columns, figsize=(4 * columns, 4 * rows), squeeze=False
+    )
+
+    for ax in axes.flat:
+        ax.axis("off")
+
+    activations = {}
+    gradients = {}
+
+    def forward_hook(_module, _inputs, output):
+        activations["value"] = output
+
+    def backward_hook(_module, _grad_input, grad_output):
+        gradients["value"] = grad_output[0]
+
+    forward_handle = target_layer.register_forward_hook(forward_hook)
+    backward_handle = target_layer.register_full_backward_hook(backward_hook)
+
+    try:
+        for ax, item in zip(axes.flat, examples):
+            image = item["image"].unsqueeze(0).to(device)
+
+            model.zero_grad(set_to_none=True)
+
+            # Forward pass with gradients enabled.
+            logits = model(image)
+
+            # Explain the predicted class, including when the prediction is wrong.
+            class_index = int(item["predicted"])
+            logits[0, class_index].backward()
+
+            activation = activations["value"]
+            gradient = gradients["value"]
+
+            if activation.ndim != 4 or gradient.ndim != 4:
+                raise ValueError(
+                    "Grad-CAM target layer must produce BCHW feature maps."
+                )
+
+            # Weight each feature map by its mean gradient.
+            weights = gradient.mean(dim=(2, 3), keepdim=True)
+            cam = (weights * activation).sum(dim=1, keepdim=True).relu()
+
+            # Resize the heatmap to the original image dimensions.
+            cam = torch.nn.functional.interpolate(
+                cam,
+                size=image.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )[0, 0]
+
+            cam = cam.detach().cpu()
+            cam_max = cam.max()
+
+            if cam_max > 0:
+                cam = cam / cam_max
+
+            original = item["image"].squeeze(0).detach().cpu().numpy()
+
+            ax.imshow(original, cmap="gray")
+            ax.imshow(
+                cam.numpy(),
+                cmap="jet",
+                alpha=0.4,
+                vmin=0,
+                vmax=1,
+            )
+
+            ax.set_title(
+                f"{item['filename']}\n"
+                f"Actual: {item['actual_name']} | "
+                f"Predicted: {item['predicted_name']}",
+                fontsize=8,
+            )
+            ax.axis("off")
+
+    finally:
+        # Remove hooks so they do not affect subsequent model operations.
+        forward_handle.remove()
+        backward_handle.remove()
+        model.zero_grad(set_to_none=True)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
 
 
 def main():
@@ -375,6 +487,8 @@ def main():
     records = []
     reject_records = []
     examples = []
+    incorrect_examples = []
+    patient_results = {}
 
     total = 0
     inference_start = time.perf_counter()
@@ -459,14 +573,32 @@ def main():
                         ),
                     })
 
-                if len(examples) < args.max_visualizations:
-                    examples.append({
-                        "image": images[i].detach().cpu(),
-                        "actual": actual,
-                        "predicted": predicted,
-                        "confidence": confidence,
+                filename = Path(image_path).name
+                stem = Path(filename).stem
+                # Slice filenames end in _<slice number>; retain the patient prefix.
+                patient_id = stem.rsplit("_", 1)[0] if "_" in stem else stem
+                patient = patient_results.setdefault(patient_id, {
+                    "num_images": 0, "num_correct": 0, "num_errors": 0, "errors": []
+                })
+                patient["num_images"] += 1
+                if actual == predicted:
+                    patient["num_correct"] += 1
+                else:
+                    patient["num_errors"] += 1
+                    patient["errors"].append({
+                        "image": image_path,
+                        "actual_class": class_names[actual],
+                        "predicted_class": class_names[predicted],
+                        "confidence": float(confidence),
                     })
-
+                    if len(incorrect_examples) < args.max_visualizations:
+                        incorrect_examples.append({
+                            "image": images[i].detach().cpu(),
+                            "actual": actual, "predicted": predicted,
+                            "confidence": confidence, "filename": filename,
+                            "actual_name": class_names[actual],
+                            "predicted_name": class_names[predicted],
+                        })
                 total += 1
 
     elapsed = time.perf_counter() - inference_start
@@ -499,6 +631,14 @@ def main():
             output_dir,
         )
         summary["full_evaluation"] = full_metrics
+        summary["per_patient_test_results"] = {
+            patient_id: {
+                **values,
+                "accuracy": values["num_correct"] / values["num_images"],
+                "error_rate": values["num_errors"] / values["num_images"],
+            }
+            for patient_id, values in sorted(patient_results.items())
+        }
 
         with (output_dir / "predictions.csv").open(
             "w", newline="", encoding="utf-8"
@@ -508,15 +648,32 @@ def main():
             writer.writerows(records)
 
         save_prediction_examples(
-            examples,
+            incorrect_examples,
             class_names,
-            output_dir / "prediction_examples.png",
+            output_dir / "incorrect_prediction_examples.png",
         )
+
+        target_layer = next(
+            (module for module in reversed(list(model.modules()))
+             if isinstance(module, nn.Conv2d)),
+            None,
+        )
+        if target_layer is not None and incorrect_examples:
+            save_gradcam_examples(
+                model, incorrect_examples, device,
+                output_dir / "gradcam_incorrect_examples.png", target_layer,
+            )
+        elif incorrect_examples:
+            print("Warning: no Conv2d layer found; Grad-CAM was not generated.")
 
         print("\nFull test-set evaluation")
         print(f"Accuracy: {full_metrics['accuracy']:.2%}")
+        print(f"Precision (weighted): {full_metrics['precision']:.4f}")
+        print(f"Recall (weighted): {full_metrics['recall']:.4f}")
+        print(f"Macro precision: {full_metrics['macro_precision']:.4f}")
+        print(f"Macro recall: {full_metrics['macro_recall']:.4f}")
         print(f"Macro-F1: {full_metrics['macro_f1']:.4f}")
-        print(f"AUROC (NC positive): {full_metrics['auroc_nc_positive']}")
+        print(f"AUROC (AD positive): {full_metrics['auroc_ad_positive']}")
         for name, metrics in full_metrics["per_class"].items():
             print(
                 f"{name}: precision={metrics['precision']:.4f}, "
