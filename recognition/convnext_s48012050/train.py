@@ -202,7 +202,15 @@ def train_model(
     output_path.mkdir(parents=True, exist_ok=True)
 
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = torch.tensor(
+        [1.5, 1.0],
+        dtype=torch.float32,
+        device=device
+    )
+
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights
+    )
     optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     history = []

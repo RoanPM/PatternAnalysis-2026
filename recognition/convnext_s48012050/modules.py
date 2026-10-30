@@ -224,19 +224,19 @@ class ConvNeXt(nn.Module):
     Consists of:
         Stem:
             (1,240,256) -> (96,60,64) 4x4 Convolution stride 4 then LayerNorm
-        3 ConvNeXt Blocks:
+        1 ConvNeXt Block:
             (96,60,64) -> (96,60,64)
         Downsample:
             (96,60,64) -> (192,30,32) LayerNorm + 2x2 Convolution stride 2
-        3 ConvNeXt Blocks:
+        1 ConvNeXt Block:
             (192,30,32) -> (192,30,32)
         Downsample:
             (192,30,32) -> (384,15,16)
-        9 ConvNeXt Blocks:
+        3 ConvNeXt Blocks:
             (384,15,16) -> (384,15,16)
         Downsample:
             (384,15,16) -> (768,7,8)
-        3 ConvNeXt Blocks:
+        1 ConvNeXt Block:
             (768,7,8) -> (768,7,8)
         Global Average Pooling:
             (768,7,8) -> (768,1,1)
@@ -256,7 +256,7 @@ class ConvNeXt(nn.Module):
     in_channels = 1
     stem_out_channels = 96
     channel_scale = 2
-    block_nums = (3, 3, 9, 3)
+    block_nums = (1, 1, 3, 1)
 
 
     def __init__(self,

@@ -9,17 +9,16 @@ from typing import Dict, Tuple
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
+from torchvision.transforms import v2
 
 
 CLASS_TO_IDX = {"AD": 0, "NC": 1}
 IMAGE_SIZE = (240, 256)  # (height, width)
 
-
 def make_transforms(augment: bool) -> transforms.Compose:
     """
     Create the transformation composition used for the dataset.
-    Currently just scales pixel values, but this method can be adapted
-    later to perform augmentation
+    Scales pixel values between [0,1], and optionally applies augmentation.
 
     Returns:
         transforms.Compose: The transformations
@@ -34,6 +33,10 @@ def make_transforms(augment: bool) -> transforms.Compose:
             degrees=5,
             translate=(0.03, 0.03),
             scale=(0.95, 1.05),
+        ))
+        # small color augmentation for variations in brightness and contrast.
+        ops.append(v2.ColorJitter(
+            brightness=0.3, contrast=0.3, saturation=0.0, hue=0.0
         ))
         
     return transforms.Compose(ops)
@@ -57,7 +60,13 @@ def validation_split(dataset, val_fraction: float, seed: int | None = None) -> T
 
     # map each patient number to the indices of their images in the dataset,
     # and also map each patient to their class
-    for index, (path, class_idx) in enumerate(dataset.samples):
+    samples = (
+        [dataset.dataset.samples[i] for i in dataset.indices] # type: ignore
+        if isinstance(dataset, Subset)
+        else dataset.samples
+    )
+
+    for index, (path, class_idx) in enumerate(samples):
         patient_id = _patient_id(path)
 
         # explicitly ensure the same patient does not appear in multiple class folders
@@ -67,7 +76,7 @@ def validation_split(dataset, val_fraction: float, seed: int | None = None) -> T
             raise ValueError(
                 f"Patient {patient_id} appears in multiple class folders"
             )
-        
+
         patient_to_indices.setdefault(patient_id, []).append(index)
 
 
@@ -94,6 +103,7 @@ def validation_split(dataset, val_fraction: float, seed: int | None = None) -> T
     val_indices = [val_indices[i] for i in torch.randperm(len(val_indices), generator=generator).tolist()]
     return train_indices, val_indices
 
+
 def _patient_id(path: str | Path) -> str:
     """Extract the patient identifier from a 'patient_slice.ext' filename."""
     stem = Path(path).stem
@@ -105,10 +115,126 @@ def _patient_id(path: str | Path) -> str:
     return patient_id
 
 
+def report_dataset(dataset, name):
+    """
+    Helper function to report on the pooled dataset, including the number of images, unique patients, counts per class, and min/max images per patient.
+    """
+    patient_images = {}
+    patient_classes = {}
+
+    for path, class_idx in dataset.samples:
+        patient_id = _patient_id(path)
+
+        patient_images[patient_id] = (
+            patient_images.get(patient_id, 0) + 1
+        )
+        patient_classes[patient_id] = class_idx
+
+    image_counts = {
+        class_name: sum(
+            label == class_idx
+            for _, label in dataset.samples
+        )
+        for class_name, class_idx in CLASS_TO_IDX.items()
+    }
+
+    patient_counts = {
+        class_name: sum(
+            label == class_idx
+            for label in patient_classes.values()
+        )
+        for class_name, class_idx in CLASS_TO_IDX.items()
+    }
+
+    print(f"\n{name}")
+    print(f"Images: {len(dataset.samples)}")
+    print(f"Unique patients: {len(patient_classes)}")
+    print(f"Images per class: {image_counts}")
+    print(f"Patients per class: {patient_counts}")
+    print(
+        "Images per patient — min/mean/max:",
+        min(patient_images.values()),
+        max(patient_images.values()),
+    )
+
+
+def report_subset(subset, name):
+    """
+    Helper function to report on the train, test, or validation subsets, including the number of images, unique patients, and counts per class.
+
+    Args:
+        subset (_type_): _description_
+        name (_type_): _description_
+    """
+    print(f"\n{name}")
+
+    counts = {"AD": 0, "NC": 0}
+    patients = set()
+
+    for index in subset.indices:
+        path, class_idx = subset.dataset.samples[index]
+        counts[list(CLASS_TO_IDX.keys())[class_idx]] += 1
+        patients.add(_patient_id(path))
+
+    print(f"Images: {len(subset)}")
+    print(f"Unique patients: {len(patients)}")
+    print(f"Images per class: {counts}")
+
+
+def create_pooled_dataset(root: Path, transform: transforms.Compose) -> datasets.ImageFolder:
+    """
+    Create the pooled dataset from all the images in the /test and /train folders together
+
+    Args:
+        root (str | Path): path to dataset root folder, containing /train and /test subfolders
+        transform (transforms.Compose): transformations to apply
+
+    Returns:
+        datasets.ImageFolder: pooled dataset
+    """
+    train_dir = root / "train"
+    test_dir = root / "test"
+
+    train_dataset = datasets.ImageFolder(
+        train_dir, transform=transform
+    )
+    test_dataset = datasets.ImageFolder(
+        test_dir, transform=transform
+    )
+
+    assert train_dataset.class_to_idx == CLASS_TO_IDX
+    assert test_dataset.class_to_idx == CLASS_TO_IDX
+
+    train_dataset.samples.extend(test_dataset.samples)
+    train_dataset.imgs = train_dataset.samples
+    train_dataset.targets = [
+        label for _, label in train_dataset.samples
+    ]
+
+    return train_dataset
+
+
+def get_patients(subset: Subset) -> set:
+    """
+    Get the set of unique patient identifiers in a subset.
+
+    Args:
+        subset (Subset): The subset to analyze.
+
+    Returns:
+        set: A set of unique patient identifiers.
+    """
+    return {
+        _patient_id(subset.dataset.samples[index][0]) # type: ignore
+        for index in subset.indices
+    }
+
+
 def create_dataloaders(
     data_dir: str | Path = "datasets",
     batch_size: int = 32,
-    val_fraction: float = 0.2,
+    val_fraction: float = 0.1,
+    test_fraction: float = 0.3,
     num_workers: int = 0,
     seed: int = 42,
     pin_memory: bool | None = None,
@@ -118,29 +244,88 @@ def create_dataloaders(
     data_dir should contain train/AD, train/NC, test/AD, and test/NC.
 
     Returns loaders keyed by 'train', 'val', and 'test'. Images have shape (B, 1, 240, 256), are grayscale, and have values in [0, 1].
-    Note: If val_fraction == 0, the 'val' key will not be present in the returned dictionary.
+    Note: If val_fraction == 0, the 'val' key will not be present in the returned dictionary and similarly for test_fraction.
     """
     if val_fraction < 0 or val_fraction >= 1:
         raise ValueError(f"val_fraction must be in [0, 1), got {val_fraction}")
+    if test_fraction < 0 or test_fraction >= 1:
+        raise ValueError(f"test_fraction must be in [0, 1), got {test_fraction}")
+    if test_fraction + val_fraction >= 1:
+        raise ValueError(
+            f"val_fraction + test_fraction must be < 1, got {val_fraction + test_fraction}"
+        )
 
     root = Path(data_dir)
     train_dir, test_dir = root / "train", root / "test"
 
-    for directory in (train_dir / "AD", train_dir / "NC", test_dir / "AD", test_dir / "NC"):
-        if not directory.is_dir():
-            raise FileNotFoundError(f"Expected class directory was not found: {directory}")
+    # Pool all images from the original training and testing folders.
+    pooled_dataset = create_pooled_dataset(
+        root,
+        transform=make_transforms(augment=True),
+    )
 
-    # ImageFolder creates the class labels for us alphabetically, so AD=0, NC=1
-    train_dataset = datasets.ImageFolder(train_dir, transform=make_transforms(augment=True))
-    val_dataset = datasets.ImageFolder(train_dir, transform=make_transforms(augment=False))
-    test_dataset = datasets.ImageFolder(test_dir, transform=make_transforms(augment=False))
+    # Create separate datasets so validation and testing do not use augmentation.
+    eval_dataset = create_pooled_dataset(
+        root,
+        transform=make_transforms(augment=False),
+    )
 
-    if val_fraction > 0:
-        train_indices, val_indices = validation_split(train_dataset, val_fraction, seed)
-        train_dataset = Subset(train_dataset, train_indices)
-        val_dataset = Subset(val_dataset, val_indices)
+    report_dataset(pooled_dataset, "Original pooled dataset")
+
+    # First split: training pool vs temporary evaluation pool.
+    train_fraction = 1.0 - val_fraction - test_fraction
+
+    train_indices, eval_indices = validation_split(
+        pooled_dataset,
+        1.0 - train_fraction,
+        seed,
+    )
+
+    # Create subsets using the appropriate transformations.
+    train_dataset = Subset(pooled_dataset, train_indices)
+    eval_subset = Subset(eval_dataset, eval_indices)
+
+    # Second split: temporary evaluation pool into validation and test.
+    if val_fraction + test_fraction > 0:
+        adjusted_val_fraction = (
+            val_fraction / (val_fraction + test_fraction)
+        )
+
+        val_relative_indices, test_relative_indices = validation_split(
+            eval_subset,
+            1.0 - adjusted_val_fraction,
+            seed + 1,
+        )
+
+        val_indices = [eval_indices[i] for i in val_relative_indices]
+        test_indices = [eval_indices[i] for i in test_relative_indices]
+
+        val_dataset = Subset(eval_dataset, val_indices)
+        test_dataset = Subset(eval_dataset, test_indices)
     else:
-        train_dataset, val_dataset = train_dataset, None
+        val_dataset = None
+        test_dataset = None
+
+    # Explicitly verify strict patient-level separation between training and validation/testing datasets.
+    train_patients = get_patients(train_dataset)
+    val_patients = get_patients(val_dataset) if val_dataset is not None else set()
+    test_patients = get_patients(test_dataset) if test_dataset is not None else set()
+
+    assert train_patients.isdisjoint(val_patients), (
+        "Patient overlap detected between training and validation datasets"
+    )
+    assert train_patients.isdisjoint(test_patients), (
+        "Patient overlap detected between training and testing datasets"
+    )
+    assert val_patients.isdisjoint(test_patients), (
+        "Patient overlap detected between validation and testing datasets"
+    )
+
+    report_subset(train_dataset, "Training")
+    if val_dataset is not None:
+        report_subset(val_dataset, "Validation")
+    if test_dataset is not None:
+        report_subset(test_dataset, "Testing")
 
     # Enable page-locked memory if we have a GPU
     if pin_memory is None:
@@ -156,14 +341,16 @@ def create_dataloaders(
     }
 
     loaders: Dict[str, DataLoader] = {
-        "train": DataLoader(train_dataset, shuffle=True, generator=loader_generator, **common),
-        "test": DataLoader(test_dataset, shuffle=False, **common),
+        "train": DataLoader(train_dataset, shuffle=True, generator=loader_generator, **common)
     }
 
     if val_dataset is not None:
         loaders["val"] = DataLoader(val_dataset, shuffle=False, **common)
 
-    print(f"Class mapping: {CLASS_TO_IDX}")
+    if test_dataset is not None:
+        loaders["test"] = DataLoader(test_dataset, shuffle=False, **common)
+
+    print(f"Class mapping: {pooled_dataset.class_to_idx}")
     for split, loader in loaders.items():
         print(f"{split}: {len(loader.dataset)} images, {len(loader)} batches") # type: ignore
     return loaders
