@@ -284,19 +284,20 @@ For the baseline CNN, validation loss and accuracy only smooth out at the end of
 
 **Figure 6. Baseline CNN confusion matrix**
 
-![Baseline Confusion Matrix](results/baseline_cm.png)
+
+<img src="results/baseline_cm.png" width="300">
 
 **Figure 7. ConvNeXt confusion matrix**
 
-![ConvNeXt Confusion Matrix](results/convnext_cm.png)
+<img src="results/convnext_cm.png" width="300">
 
 **Figure 8. Baseline ROC Curve**
 
-![Baseline ROC](results/baseline_roc.png)
+<img src="results/baseline_roc.png" width="300">
 
 **Figure 9. ConvNeXt ROC Curve**
 
-![ConvNeXt ROC](results/convnext_roc.png)
+<img src="results/convnext_roc.png" width="300">
 
 #### 7.1.3 Quantitative Analysis
 
@@ -526,4 +527,4 @@ in Proc. CVPR, 2022, pp. 11976–11986.
 
 
 ## Appendix B. Baseline incorrect Grad-CAM's
-<img src="images/baseline_gradcam_incorrect_examples.png" width="255">
+<img src="images/baseline_gradcam_incorrect_examples.png" width="700">
