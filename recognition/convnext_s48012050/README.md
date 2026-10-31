@@ -231,13 +231,12 @@ Below is an example of the images in the dataset, and that same image under the 
 
 **Figure 2. Example dataset image**
 
-![Unprocessed training image](images/218391_78.jpeg)
+<img src="images/218391_78.jpeg" width="600">
 
 
 **Figure 3. Example preprocessed input image**
 
-![Preprocessed and augmented image](images/transformed_image.png)
-
+<img src="images/transformed_image.png" width="600">
 
 
 ### 6.2 Training and Validation Curves
@@ -285,19 +284,19 @@ For the baseline CNN, validation loss and accuracy only smooth out at the end of
 **Figure 6. Baseline CNN confusion matrix**
 
 
-<img src="results/baseline_cm.png" width="300">
+<img src="results/baseline_cm.png" width="600">
 
 **Figure 7. ConvNeXt confusion matrix**
 
-<img src="results/convnext_cm.png" width="300">
+<img src="results/convnext_cm.png" width="600">
 
 **Figure 8. Baseline ROC Curve**
 
-<img src="results/baseline_roc.png" width="300">
+<img src="results/baseline_roc.png" width="600">
 
 **Figure 9. ConvNeXt ROC Curve**
 
-<img src="results/convnext_roc.png" width="300">
+<img src="results/convnext_roc.png" width="600">
 
 #### 7.1.3 Quantitative Analysis
 
@@ -344,9 +343,9 @@ This is the most dangerous of the errors the model made, especially in the conte
 
 **Figure 10. Case 1 Original Image and Grad-CAM**
 
-![Original](images/case_analysis/1240482_97.jpeg)
+<img src="images/case_analysis/1240482_97.jpeg" width="600">
 
-<img src="images/case_analysis/gradcam_1240482_97.png" width="255">
+<img src="images/case_analysis/gradcam_1240482_97.png" width="600">
 
 
 | Property | Result |
@@ -368,9 +367,9 @@ In this case the model is very uncertain about its prediction, and ultimately pr
 
 **Figure 11. Case 2 Original Image and Grad-CAM**
 
-![Original](images/case_analysis/1004740_99.jpeg)
+<img src="images/case_analysis/1004740_99.jpeg" width="600">
 
-<img src="images/case_analysis/gradcam_1004740_99.png" width="255">
+<img src="images/case_analysis/gradcam_1004740_99.png" width="600">
 
 | Property | Result |
 |---|---|
@@ -391,9 +390,9 @@ This is the other end of the false confident predictions, where the model incorr
 
 **Figure 12. Case 3 Original Image and Grad-CAM**
 
-![Original](images/case_analysis/1303143_106.jpeg)
+<img src="images/case_analysis/1303143_106.jpeg" width="600">
 
-<img src="images/case_analysis/gradcam_1303143_106.png" width="255">
+<img src="images/case_analysis/gradcam_1303143_106.png" width="600">
 
 | Property | Result |
 |---|---|
@@ -520,11 +519,11 @@ in Proc. CVPR, 2022, pp. 11976–11986.
 
 ## Appendix A. ConvNeXt Correct Grad-CAM's
 
-<img src="images/correct_cams/correct_256178_102.png" width="255">
-<img src="images/correct_cams/correct_324279_92.png" width="255">
-<img src="images/correct_cams/correct_1072842_85.png" width="255">
-<img src="images/correct_cams/correct_1278640_100.png" width="255">
+<img src="images/correct_cams/correct_256178_102.png" width="600">
+<img src="images/correct_cams/correct_324279_92.png" width="600">
+<img src="images/correct_cams/correct_1072842_85.png" width="600">
+<img src="images/correct_cams/correct_1278640_100.png" width="600">
 
 
 ## Appendix B. Baseline incorrect Grad-CAM's
-<img src="images/baseline_gradcam_incorrect_examples.png" width="700">
+<img src="images/baseline_gradcam_incorrect_examples.png" width="900">
