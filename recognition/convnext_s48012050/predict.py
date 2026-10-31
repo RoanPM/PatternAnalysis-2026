@@ -68,7 +68,8 @@ from sklearn.metrics import (
 from dataset import create_dataloaders
 from modules import (
     BaselineCNN,
-    ConvNeXt
+    ConvNeXt,
+    ConvNeXtBlock
 )
 from dataset import CLASS_TO_IDX
 
@@ -654,9 +655,9 @@ def main():
         )
 
         target_layer = next(
-            (module for module in reversed(list(model.modules()))
-             if isinstance(module, nn.Conv2d)),
-            None,
+            (layer for layer in reversed(list(model.modules()))
+            if isinstance(layer, ConvNeXtBlock)),
+            None
         )
         if target_layer is not None and incorrect_examples:
             save_gradcam_examples(
